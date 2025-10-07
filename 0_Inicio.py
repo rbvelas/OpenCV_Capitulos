@@ -17,7 +17,7 @@ st.set_page_config(
 PATH_PORTADA = "img/portada_libro.jpg"
 
 st.markdown(
-    """
+    '''
     <style>
         .title-text {
             font-size: 2.4em; 
@@ -37,7 +37,7 @@ st.markdown(
             color: #374151;
         }
     </style>
-    """,
+    ''',
     unsafe_allow_html=True
 )
 

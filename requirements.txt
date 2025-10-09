@@ -1,6 +1,9 @@
+av
 numpy
 opencv_contrib_python
 opencv_python
+pandas
 Pillow
+scikit_learn
 streamlit
 streamlit_webrtc

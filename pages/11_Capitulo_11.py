@@ -36,8 +36,8 @@ class FeatureExtractor:
     """Extrae características usando SIFT y Bag of Words"""
     
     def __init__(self):
-        # Usar SIFT con más características para mejor detección
-        self.sift = cv2.SIFT_create(nfeatures=300, contrastThreshold=0.03)
+        # SIFT optimizado
+        self.sift = cv2.SIFT_create(nfeatures=400, contrastThreshold=0.02)
     
     def extract_sift_features(self, img):
         """Extrae descriptores SIFT de una imagen con preprocesamiento"""
@@ -46,10 +46,7 @@ class FeatureExtractor:
         else:
             gray = img
         
-        # Mejorar contraste
         gray = cv2.equalizeHist(gray)
-        
-        # Detectar keypoints y descriptores
         keypoints, descriptors = self.sift.detectAndCompute(gray, None)
         
         return descriptors
@@ -132,11 +129,10 @@ class ClassifierANN:
         feature_vector = np.array(feature_vector, dtype=np.float32).reshape(1, -1)
         retval, output = self.ann.predict(feature_vector)
         
-        # Normalizar salidas a probabilidades
         probs = {}
         output = output[0]
         for i, label in enumerate(self.label_words):
-            probs[label] = max(0, min(1, (output[i] + 1) / 2))  # De [-1,1] a [0,1]
+            probs[label] = max(0, min(1, (output[i] + 1) / 2))
         
         return probs
     
@@ -157,70 +153,130 @@ class ClassifierANN:
         return confusion_matrix
 
 
-# --- Procesador de Video para Clasificación en Tiempo Real ---
+# --- Procesador de Video MEJORADO con ROI ---
 class ANNVideoProcessor(VideoProcessorBase):
-    """Procesa video en tiempo real con clasificación ANN mejorada"""
+    """Procesa video en tiempo real con ROI y detección mejorada"""
     
     def __init__(self):
         self.classifier = None
         self.feature_extractor = None
         self.kmeans = None
         self.frame_count = 0
-        self.skip_frames = 8  # Más rápido: cada 8 frames
+        self.skip_frames = 3  # Análisis cada 3 frames
         self.last_prediction = "Esperando..."
         self.last_probabilities = {}
-        self.prediction_history = []  # Historial para suavizado
-        self.history_size = 5  # Últimas 5 predicciones
+        self.prediction_history = []
+        self.history_size = 10  # Historial más largo
+        self.confidence_threshold = 0.55  # Threshold mejorado
         self.lock = threading.Lock()
-    
-    def preprocess_frame(self, img):
-        """Preprocesa el frame para mejor detección"""
+        
+        # Estado de estabilidad
+        self.stable_prediction = None
+        self.stable_count = 0
+        self.stability_threshold = 6  # Frames consecutivos para confirmar
+        
+    def extract_roi_with_contours(self, img, roi_rect):
+        """Extrae y preprocesa el ROI con detección de contornos"""
+        x, y, w, h = roi_rect
+        roi = img[y:y+h, x:x+w].copy()
+        
         # Convertir a escala de grises
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         
-        # Ecualizar histograma para mejor contraste
-        gray = cv2.equalizeHist(gray)
+        # Aplicar blur para reducir ruido
+        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
         
-        # Aplicar filtro bilateral para reducir ruido manteniendo bordes
-        gray = cv2.bilateralFilter(gray, 9, 75, 75)
+        # Ecualización adaptativa (CLAHE)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blurred)
         
-        # Aplicar threshold adaptativo para realzar formas
-        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                       cv2.THRESH_BINARY, 11, 2)
+        # Threshold adaptativo
+        binary = cv2.adaptiveThreshold(
+            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 15, 5
+        )
         
-        # Invertir si el fondo es oscuro
-        if np.mean(binary) < 127:
-            binary = cv2.bitwise_not(binary)
+        # Operaciones morfológicas para limpiar
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
         
-        # Convertir de vuelta a BGR para SIFT
-        processed = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+        # Encontrar el contorno más grande (objeto principal)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        return processed
+        if contours:
+            # Obtener el contorno más grande
+            largest_contour = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest_contour)
+            
+            # Filtrar contornos muy pequeños (ruido)
+            if area > 500:  # Área mínima en píxeles
+                # Crear máscara con el contorno
+                mask = np.zeros_like(binary)
+                cv2.drawContours(mask, [largest_contour], -1, 255, -1)
+                
+                # Extraer región del objeto
+                object_region = cv2.bitwise_and(enhanced, enhanced, mask=mask)
+                
+                # Convertir a BGR para SIFT
+                result = cv2.cvtColor(object_region, cv2.COLOR_GRAY2BGR)
+                
+                return result, True, largest_contour
+        
+        # Si no hay contornos válidos, usar imagen preprocesada
+        result = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+        return result, False, None
     
     def smooth_predictions(self, current_probs):
-        """Suaviza las predicciones usando historial"""
+        """Suaviza las predicciones usando historial con pesos"""
         self.prediction_history.append(current_probs)
         
-        # Mantener solo las últimas N predicciones
         if len(self.prediction_history) > self.history_size:
             self.prediction_history.pop(0)
         
-        # Promediar probabilidades
         if len(self.prediction_history) > 0:
             smoothed_probs = {}
+            
+            # Aplicar pesos exponenciales (más recientes = más peso)
+            weights = np.exp(np.linspace(-1, 0, len(self.prediction_history)))
+            weights = weights / weights.sum()
+            
             for label in current_probs.keys():
-                probs = [p[label] for p in self.prediction_history if label in p]
-                smoothed_probs[label] = np.mean(probs) if probs else 0.0
+                weighted_sum = 0
+                for i, pred in enumerate(self.prediction_history):
+                    if label in pred:
+                        weighted_sum += pred[label] * weights[i]
+                smoothed_probs[label] = weighted_sum
             
             return smoothed_probs
         
         return current_probs
     
+    def check_stability(self, predicted_label, confidence):
+        """Verifica si la predicción es estable"""
+        if predicted_label == self.stable_prediction and confidence > self.confidence_threshold:
+            self.stable_count += 1
+        else:
+            self.stable_prediction = predicted_label
+            self.stable_count = 1
+        
+        return self.stable_count >= self.stability_threshold
+    
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
+        height, width = img.shape[:2]
+        
+        # Definir ROI (zona de detección centrada)
+        roi_size = min(width, height) // 2
+        roi_x = (width - roi_size) // 2
+        roi_y = (height - roi_size) // 2
+        roi_rect = (roi_x, roi_y, roi_size, roi_size)
         
         # Verificar si el modelo está cargado
         if self.classifier is None or self.feature_extractor is None or self.kmeans is None:
+            # Dibujar ROI incluso sin modelo
+            cv2.rectangle(img, (roi_x, roi_y), (roi_x + roi_size, roi_y + roi_size), 
+                         (100, 100, 100), 3)
             cv2.putText(img, "Modelo no cargado - Entrena primero", (10, 30), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             return av.VideoFrame.from_ndarray(img, format="bgr24")
@@ -229,93 +285,118 @@ class ANNVideoProcessor(VideoProcessorBase):
         self.frame_count += 1
         if self.frame_count % self.skip_frames == 0:
             try:
-                # Preprocesar frame
-                processed = self.preprocess_frame(img)
+                # Extraer y preprocesar ROI con detección de contornos
+                processed_roi, has_object, contour = self.extract_roi_with_contours(img, roi_rect)
                 
-                # Redimensionar a tamaño óptimo
-                height, width = processed.shape[:2]
-                target_size = 200  # Aumentado para mejor detección
-                scale = target_size / max(height, width)
-                new_w, new_h = int(width * scale), int(height * scale)
-                img_small = cv2.resize(processed, (new_w, new_h))
-                
-                # Extraer características con el frame preprocesado
-                feature_vector = self.feature_extractor.get_feature_vector(img_small, self.kmeans)
-                
-                # Predecir
-                predicted_label = self.classifier.predict(feature_vector)
-                probabilities = self.classifier.predict_proba(feature_vector)
-                
-                # Suavizar predicciones
-                smoothed_probs = self.smooth_predictions(probabilities)
-                
-                # Encontrar la predicción con mayor probabilidad suavizada
-                if smoothed_probs:
-                    best_label = max(smoothed_probs, key=smoothed_probs.get)
-                    best_prob = smoothed_probs[best_label]
+                # Solo clasificar si se detectó un objeto claro
+                if has_object:
+                    # Extraer características
+                    feature_vector = self.feature_extractor.get_feature_vector(
+                        processed_roi, self.kmeans
+                    )
                     
-                    # Solo actualizar si la confianza es alta
-                    if best_prob > 0.4:  # Threshold de confianza
+                    # Predecir
+                    predicted_label = self.classifier.predict(feature_vector)
+                    probabilities = self.classifier.predict_proba(feature_vector)
+                    
+                    # Suavizar predicciones
+                    smoothed_probs = self.smooth_predictions(probabilities)
+                    
+                    if smoothed_probs:
+                        best_label = max(smoothed_probs, key=smoothed_probs.get)
+                        best_prob = smoothed_probs[best_label]
+                        
+                        # Verificar estabilidad
+                        is_stable = self.check_stability(best_label, best_prob)
+                        
                         with self.lock:
-                            self.last_prediction = best_label
-                            self.last_probabilities = smoothed_probs
-                    else:
-                        with self.lock:
-                            self.last_prediction = "Baja confianza"
-                            self.last_probabilities = smoothed_probs
+                            if best_prob > self.confidence_threshold and is_stable:
+                                self.last_prediction = best_label
+                                self.last_probabilities = smoothed_probs
+                            elif best_prob > self.confidence_threshold:
+                                self.last_prediction = f"{best_label} (confirmando...)"
+                                self.last_probabilities = smoothed_probs
+                            else:
+                                self.last_prediction = "Confianza baja"
+                                self.last_probabilities = smoothed_probs
+                else:
+                    with self.lock:
+                        self.last_prediction = "Sin objeto detectado"
+                        self.stable_count = 0
                 
             except Exception as e:
                 with self.lock:
-                    self.last_prediction = "Error de procesamiento"
+                    self.last_prediction = f"Error: {str(e)[:20]}"
         
-        # Dibujar información en el frame
+        # Dibujar visualización
         with self.lock:
-            # Fondo semitransparente para el panel
+            # Dibujar ROI con color según estado
+            if "confirmando" in self.last_prediction.lower():
+                roi_color = (0, 165, 255)  # Naranja: confirmando
+            elif self.stable_count >= self.stability_threshold:
+                roi_color = (0, 255, 0)  # Verde: estable
+            elif "sin objeto" in self.last_prediction.lower():
+                roi_color = (0, 0, 255)  # Rojo: sin objeto
+            else:
+                roi_color = (255, 255, 0)  # Cyan: analizando
+            
+            cv2.rectangle(img, (roi_x, roi_y), (roi_x + roi_size, roi_y + roi_size), 
+                         roi_color, 3)
+            
+            # Texto de instrucción en el ROI
+            cv2.putText(img, "COLOCA OBJETO AQUI", 
+                       (roi_x + 10, roi_y + 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, roi_color, 2)
+            
+            # Panel de información con fondo
             overlay = img.copy()
-            cv2.rectangle(overlay, (0, 0), (450, 140), (0, 0, 0), -1)
-            cv2.addWeighted(overlay, 0.7, img, 0.3, 0, img)
+            panel_height = 180
+            cv2.rectangle(overlay, (0, 0), (500, panel_height), (0, 0, 0), -1)
+            cv2.addWeighted(overlay, 0.75, img, 0.25, 0, img)
             
             # Título
-            cv2.putText(img, "Clasificacion ANN - Mejorado", (10, 25), 
+            cv2.putText(img, "ANN + ROI + Deteccion Estable", (10, 25), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
-            # Predicción actual con icono
+            # Predicción actual
             icons = {'circulo': 'O', 'cuadrado': '[]', 'triangulo': '^'}
-            icon = icons.get(self.last_prediction, '?')
+            clean_pred = self.last_prediction.split(' (')[0]  # Quitar "(confirmando...)"
+            icon = icons.get(clean_pred, '?')
             
-            # Color según confianza
-            if self.last_probabilities and self.last_prediction in self.last_probabilities:
-                confidence = self.last_probabilities[self.last_prediction]
-                if confidence > 0.7:
-                    color = (0, 255, 0)  # Verde: alta confianza
-                elif confidence > 0.4:
-                    color = (0, 255, 255)  # Amarillo: media confianza
-                else:
-                    color = (0, 165, 255)  # Naranja: baja confianza
+            # Color según estado
+            if self.stable_count >= self.stability_threshold:
+                pred_color = (0, 255, 0)  # Verde: confirmado
+            elif "confirmando" in self.last_prediction.lower():
+                pred_color = (0, 165, 255)  # Naranja: confirmando
+            elif "sin objeto" in self.last_prediction.lower():
+                pred_color = (0, 0, 255)  # Rojo
             else:
-                color = (200, 200, 200)
+                pred_color = (200, 200, 200)  # Gris
             
             cv2.putText(img, f"{icon} {self.last_prediction.upper()}", (10, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, pred_color, 2)
             
-            # Mostrar probabilidades suavizadas con barras
-            y_pos = 95
+            # Barra de estabilidad
+            stability_percent = (self.stable_count / self.stability_threshold) * 100
+            cv2.putText(img, f"Estabilidad: {min(stability_percent, 100):.0f}%", 
+                       (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            # Mostrar probabilidades
+            y_pos = 115
             for label, prob in sorted(self.last_probabilities.items(), 
                                      key=lambda x: x[1], reverse=True):
-                # Texto de probabilidad
                 text = f"{label}: {prob*100:.1f}%"
-                bar_color = (0, 255, 0) if prob > 0.6 else (100, 200, 200)
+                bar_color = (0, 255, 0) if prob > 0.7 else (100, 200, 200)
                 cv2.putText(img, text, (10, y_pos), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
-                # Barra de probabilidad
                 bar_width = int(prob * 200)
-                cv2.rectangle(img, (180, y_pos - 12), (180 + bar_width, y_pos - 2), 
+                cv2.rectangle(img, (200, y_pos - 12), (200 + bar_width, y_pos - 2), 
                             bar_color, -1)
-                cv2.rectangle(img, (180, y_pos - 12), (380, y_pos - 2), 
+                cv2.rectangle(img, (200, y_pos - 12), (400, y_pos - 2), 
                             (100, 100, 100), 1)
                 
-                y_pos += 25
+                y_pos += 22
         
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -381,22 +462,19 @@ def get_default_images():
     """Genera imágenes de ejemplo con data augmentation para demostración"""
     images = {}
     
-    # Parámetros para mayor variabilidad
-    num_samples = 40  # Aumentado a 40 muestras
-    img_size = 150  # Imágenes más grandes
+    num_samples = 40
+    img_size = 150
     
-    # CÍRCULOS - Con variaciones
+    # CÍRCULOS
     circles = []
     for i in range(num_samples):
         img = np.ones((img_size, img_size, 3), dtype=np.uint8) * 255
         
-        # Parámetros aleatorios
         radius = np.random.randint(20, 60)
         center_x = np.random.randint(radius + 5, img_size - radius - 5)
         center_y = np.random.randint(radius + 5, img_size - radius - 5)
-        thickness = np.random.choice([-1, -1, -1, 4, 5])  # Más rellenos
+        thickness = np.random.choice([-1, -1, -1, 4, 5])
         
-        # Colores más variados
         if np.random.random() > 0.5:
             color = tuple(np.random.randint(50, 256, 3).tolist())
         else:
@@ -404,12 +482,10 @@ def get_default_images():
         
         cv2.circle(img, (center_x, center_y), radius, color, thickness)
         
-        # Agregar círculos adicionales pequeños a veces
         if np.random.random() > 0.7:
             cv2.circle(img, (center_x, center_y), radius//2, 
                       tuple(np.random.randint(0, 256, 3).tolist()), 2)
         
-        # Ruido más fuerte
         if np.random.random() > 0.3:
             img = add_noise(img, noise_level=20)
         
@@ -417,17 +493,15 @@ def get_default_images():
     
     images['circulo'] = circles
     
-    # CUADRADOS - Con rotaciones y variaciones
+    # CUADRADOS
     squares = []
     for i in range(num_samples):
         img = np.ones((img_size, img_size, 3), dtype=np.uint8) * 255
         
-        # Parámetros aleatorios
         size = np.random.randint(40, 100)
         center_x = img_size // 2
         center_y = img_size // 2
         
-        # Dibujar cuadrado centrado
         pt1 = (center_x - size//2, center_y - size//2)
         pt2 = (center_x + size//2, center_y + size//2)
         thickness = np.random.choice([-1, -1, -1, 4, 5])
@@ -439,7 +513,6 @@ def get_default_images():
         
         cv2.rectangle(img, pt1, pt2, color, thickness)
         
-        # Agregar cuadrado interno a veces
         if np.random.random() > 0.7:
             inner_size = size // 2
             pt1_inner = (center_x - inner_size//2, center_y - inner_size//2)
@@ -447,13 +520,11 @@ def get_default_images():
             cv2.rectangle(img, pt1_inner, pt2_inner, 
                          tuple(np.random.randint(0, 256, 3).tolist()), 3)
         
-        # CRÍTICO: Rotar en múltiplos de 15° para mejor cobertura
         angle = np.random.choice([0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 
                                  150, 165, 180, 195, 210, 225, 240, 255, 
                                  270, 285, 300, 315, 330, 345])
         img = rotate_image(img, angle)
         
-        # Ruido
         if np.random.random() > 0.3:
             img = add_noise(img, noise_level=20)
         
@@ -461,17 +532,15 @@ def get_default_images():
     
     images['cuadrado'] = squares
     
-    # TRIÁNGULOS - Con rotaciones y variaciones
+    # TRIÁNGULOS
     triangles = []
     for i in range(num_samples):
         img = np.ones((img_size, img_size, 3), dtype=np.uint8) * 255
         
-        # Parámetros aleatorios para el triángulo
         center_x = img_size // 2
         center_y = img_size // 2
         size = np.random.randint(40, 90)
         
-        # Triángulo equilátero centrado
         height = int(size * np.sqrt(3) / 2)
         pts = np.array([
             [center_x, center_y - 2*height//3],
@@ -484,24 +553,20 @@ def get_default_images():
         else:
             color = tuple(np.random.randint(0, 100, 3).tolist())
         
-        # Más probabilidad de relleno
         if np.random.random() > 0.2:
             cv2.fillPoly(img, [pts], color)
         else:
             cv2.polylines(img, [pts], True, color, 4)
         
-        # Agregar líneas internas a veces
         if np.random.random() > 0.7:
             cv2.line(img, tuple(pts[0]), tuple(pts[1]), 
                     tuple(np.random.randint(0, 256, 3).tolist()), 2)
         
-        # CRÍTICO: Rotar en múltiplos de 15°
         angle = np.random.choice([0, 15, 30, 45, 60, 75, 90, 105, 120, 135, 
                                  150, 165, 180, 195, 210, 225, 240, 255, 
                                  270, 285, 300, 315, 330, 345])
         img = rotate_image(img, angle)
         
-        # Ruido
         if np.random.random() > 0.3:
             img = add_noise(img, noise_level=20)
         
@@ -511,16 +576,13 @@ def get_default_images():
     
     return images
 
-
 # --- Función Principal ---
 def run_capitulo11():
     
-    # ------------------ Encabezado ------------------
     st.title("CAPÍTULO 11: Aprendizaje automático mediante una red neuronal artificial")
     st.markdown("##### *Machine Learning (ML) by an Artificial Neural Network (ANN)*")
     st.markdown("---")
     
-    # ------------------ Introducción ------------------
     st.header("📚 Introducción a las Redes Neuronales Artificiales")
     
     with st.expander("ℹ️ ¿Qué es una ANN-MLP?", expanded=False):
@@ -547,19 +609,17 @@ def run_capitulo11():
         4. Evaluación (Matriz de confusión)
         """)
     
-    st.info("📌 **Aprenderás:** Entrenar ANN, clasificar imágenes y webcam en tiempo real")
+    st.info("📌 **Aprenderás:** Entrenar ANN, clasificar imágenes y webcam en tiempo real CON ROI")
     
-    # ------------------ Selector de Modo ------------------
     st.markdown("---")
     st.header("⚙️ Modo de Operación")
     
     mode = st.radio(
         "Selecciona cómo usar el clasificador:",
-        ["🎓 Entrenar Modelo", "🔍 Clasificar Imagen", "📹 Clasificación en Vivo (Webcam)"],
+        ["🎓 Entrenar Modelo", "🔍 Clasificar Imagen", "📹 Clasificación en Vivo (Webcam MEJORADA)"],
         horizontal=True
     )
     
-    # Inicializar estados
     if 'trained_model' not in st.session_state:
         st.session_state.trained_model = None
     if 'feature_extractor' not in st.session_state:
@@ -575,19 +635,7 @@ def run_capitulo11():
         st.header("📊 Entrenamiento del Modelo")
         
         st.info("""
-        **Modo Demostración**: Entrenaremos con formas sintéticas ultra-mejoradas.
-        
-        🎯 **Mejoras V2 aplicadas:**
-        - ✅ **40 muestras** por clase (120 total)
-        - ✅ **Rotaciones discretas** cada 15° para mejor cobertura
-        - ✅ **Imágenes 150x150px** (más grandes = mejor SIFT)
-        - ✅ **Preprocesamiento mejorado**: Ecualización de histograma
-        - ✅ **100 clusters BOW** (óptimo para estas figuras)
-        - ✅ **Colores variados** (oscuros y claros)
-        - ✅ **Formas anidadas** (círculos dentro de círculos, etc.)
-        - ✅ **Ruido adaptativo** en 70% de las muestras
-        - ✅ **Threshold de confianza** en video (filtro de predicciones débiles)
-        - ✅ **Suavizado temporal** (promedia últimas 5 predicciones)
+        **Modo Demostración**: Entrenaremos con formas sintéticas optimizadas para detección ROI.
         """)
         
         col1, col2 = st.columns(2)
@@ -606,22 +654,20 @@ def run_capitulo11():
                 demo_images = get_default_images()
                 st.session_state.label_words = list(demo_images.keys())
             
-            st.success(f"✅ {sum(len(imgs) for imgs in demo_images.values())} imágenes generadas (con rotaciones y variaciones)")
+            st.success(f"✅ {sum(len(imgs) for imgs in demo_images.values())} imágenes generadas")
             
-            # Mostrar ejemplos variados
-            st.markdown("**📷 Ejemplos de Imágenes Generadas (con data augmentation):**")
-            st.caption("⚡ Cada clase incluye: rotaciones 0-360°, diferentes tamaños, posiciones y colores variados")
+            st.markdown("**📷 Ejemplos de Imágenes Generadas:**")
+            st.caption("⚡ Cada clase incluye: rotaciones, tamaños, posiciones y colores variados")
             
             cols = st.columns(len(demo_images))
             for idx, (label, images) in enumerate(demo_images.items()):
                 with cols[idx]:
-                    # Mostrar 3 ejemplos por clase para ver la variabilidad
                     st.markdown(f"**{label.upper()}**")
                     for i in range(min(3, len(images))):
                         st.image(cv2.cvtColor(images[i], cv2.COLOR_BGR2RGB), 
                                 use_container_width=True)
                         if i < 2:
-                            st.markdown("")  # Espacio
+                            st.markdown("")
             
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -672,7 +718,6 @@ def run_capitulo11():
             
             st.success("✅ ¡Red entrenada!")
             
-            # Evaluación
             st.markdown("---")
             st.header("📈 Evaluación")
             
@@ -695,7 +740,6 @@ def run_capitulo11():
                 avg_acc = np.mean(list(accuracies.values()))
                 st.metric("**Promedio**", f"{avg_acc*100:.1f}%")
             
-            # Arquitectura
             st.markdown("---")
             st.markdown("**🏗️ Arquitectura:**")
             arch_col1, arch_col2, arch_col3 = st.columns(3)
@@ -775,79 +819,129 @@ def run_capitulo11():
                     
                     st.markdown("**Probabilidades:**")
                     for label, prob in probabilities.items():
-                        st.progress(prob, text=f"{label}: {prob*100:.1f}%")
+                        st.progress(float(prob), text=f"{label}: {prob*100:.1f}%")
                 else:
                     st.error("❌ No se pudo clasificar")
     
     # ------------------ MODO: WEBCAM EN VIVO ------------------
-    elif mode == "📹 Clasificación en Vivo (Webcam)":
+    elif mode == "📹 Clasificación en Vivo (Webcam MEJORADA)":
         st.markdown("---")
-        st.header("📹 Clasificación en Tiempo Real")
+        st.header("📹 Clasificación en Tiempo Real con ROI")
         
         if st.session_state.trained_model is None:
             st.warning("⚠️ Primero entrena el modelo")
             return
         
         st.success(f"✅ Modelo cargado: **{', '.join(st.session_state.label_words)}**")
-        
-        st.info("""
-        📌 **Instrucciones Mejoradas:**
-        1. Presiona **START** para activar la cámara
-        2. Muestra objetos con formas geométricas CLARAS
-        3. La clasificación incluye **suavizado temporal** (promedia 5 frames)
-        4. **Funciona con cualquier rotación** y posición
-        
-        💡 **Tips para MÁXIMA precisión:**
-        - 📄 **Dibuja formas grandes en papel blanco** con marcador negro
-        - 🔦 **Buena iluminación** (evita sombras fuertes)
-        - 📏 **Formas simples y claras** (sin adornos)
-        - 🎯 **Centra la forma** en el frame
-        - 🖼️ **Fondo uniforme** (preferiblemente claro)
-        - 📐 **Formas de ~10-20cm** funcionan mejor
-        - ⚡ La barra verde indica **alta confianza** (>70%)
-        
-        🎨 **Ejemplos recomendados:**
-        - ⭕ Círculo: Plato, tapa, CD, pelota
-        - ⬜ Cuadrado: Libro, caja, post-it (puede estar rotado)
-        - 🔺 Triángulo: Dibujado en papel o formar con manos
-        """)
-        
-        # Configurar WebRTC
-        ice_servers = get_ice_servers()
-        RTC_CONFIGURATION = RTCConfiguration({"iceServers": ice_servers})
-        
-        # Crear y configurar el procesador
-        webrtc_ctx = webrtc_streamer(
-            key="ann_classifier",
-            video_processor_factory=ANNVideoProcessor,
-            rtc_configuration=RTC_CONFIGURATION,
-            media_stream_constraints={"video": True, "audio": False},
-            async_processing=True,
-        )
-        
-        # Cargar modelo en el procesador
-        if webrtc_ctx.video_processor:
+
+        # Tips expandibles
+        with st.expander("💡 Tips para MÁXIMA precisión", expanded=True):
+            st.markdown("""
+            ### 🎯 Recomendaciones:
+            
+            **✅ MEJOR opción - Dibujos en papel:**
+            - 📄 Dibuja formas **GRANDES** (10-15cm) con marcador **NEGRO** en papel **BLANCO**
+            - 🖊️ Líneas **gruesas y continuas** (sin interrupciones)
+            - ✂️ Recorta alrededor de la forma para eliminar distracciones
+            - 📐 Mantén la forma **plana** frente a la cámara
+            
+            **🔦 Iluminación:**
+            - Luz natural o artificial **uniforme**
+            - Evita sombras fuertes sobre el objeto
+            - No uses luz directa que cause reflejos
+            
+            **📦 Objetos físicos que funcionan:**
+            - ⭕ **Círculos**: Tapa, plato, CD, aro (debe ser plano)
+            - ⬜ **Cuadrados**: Libro cerrado, caja plana, post-it grande
+            - 🔺 **Triángulos**: Regla triangular, forma con cartulina
+            
+            **❌ Evita:**
+            - Objetos muy pequeños (<5cm)
+            - Formas con texturas complejas o patrones
+            - Fondos desordenados
+            - Movimientos rápidos
+            - Múltiples objetos en el ROI
+            
+            **🎬 Proceso óptimo:**
+            1. Posiciona el objeto **CENTRADO en el ROI**
+            2. **Espera 2 segundos** sin mover
+            3. El cuadro cambiará a **NARANJA** (confirmando)
+            4. Después a **VERDE** (confirmado ✅)
+            5. La "Estabilidad" llegará a 100%
+            """)
+
+        cam_col, info_col = st.columns([2, 1])
+        with info_col:
+            st.info("""
+            ### 📋 Instrucciones de uso:
+            1. Presiona **START** para activar la cámara
+            2. **COLOCA EL OBJETO DENTRO DEL CUADRO ROI** (zona central)
+            3. Mantén el objeto **quieto y centrado** por 1-2 segundos
+            4. Verás el estado cambiar: Analizando → Confirmando → ✅ Confirmado
+            5. La barra de "Estabilidad" muestra el progreso de confirmación
+            """)
+
+        # WebRTC en la columna izquierda
+        with cam_col:
+            ice = get_ice_servers()
+            RTC_CONFIGURATION = RTCConfiguration({"iceServers": ice})
+            webrtc_ctx = webrtc_streamer(
+                key="ann_classifier_roi",
+                video_processor_factory=ANNVideoProcessor,
+                rtc_configuration=RTC_CONFIGURATION,
+                media_stream_constraints={"video": True, "audio": False},
+                async_processing=True,
+            )
+
+        # cargar modelo al procesador
+        if 'webrtc_ctx' in locals() and webrtc_ctx and webrtc_ctx.video_processor:
             webrtc_ctx.video_processor.classifier = st.session_state.trained_model
             webrtc_ctx.video_processor.feature_extractor = st.session_state.feature_extractor
             webrtc_ctx.video_processor.kmeans = st.session_state.kmeans
-        
+
         # Panel de información
         st.markdown("---")
-        st.markdown("### 💡 Tips para Mejores Resultados")
+        st.markdown("### 🎨 Guía Visual de Formas")
         
         col_t1, col_t2, col_t3 = st.columns(3)
         
         with col_t1:
             st.markdown("**🔴 Círculos**")
-            st.caption("Muestra objetos redondos: pelotas, platos, etc.")
+            st.caption("Objetos completamente redondos")
+            st.code("○ ⭕ 🔴")
         
         with col_t2:
             st.markdown("**🟩 Cuadrados**")
-            st.caption("Muestra objetos cuadrados: libros, cajas, etc.")
+            st.caption("4 lados iguales con ángulos rectos")
+            st.code("□ ▢ 🟩")
         
         with col_t3:
             st.markdown("**🔺 Triángulos**")
-            st.caption("Forma triángulos con las manos o papel")
-
+            st.caption("3 lados formando punta")
+            st.code("△ ▲ 🔺")
+        
+        # Estado del sistema
+        st.markdown("---")
+        st.markdown("### 📊 Estados del Sistema")
+        
+        state_col1, state_col2 = st.columns(2)
+        
+        with state_col1:
+            st.markdown("""
+            **🚦 Color del ROI:**
+            - 🟢 **Verde**: Objeto confirmado (>6 frames)
+            - 🟠 **Naranja**: Confirmando objeto
+            - 🔵 **Cyan**: Analizando
+            - 🔴 **Rojo**: Sin objeto detectado
+            """)
+        
+        with state_col2:
+            st.markdown("""
+            **📈 Barra de Estabilidad:**
+            - 0-30%: Iniciando detección
+            - 30-60%: Objeto detectado
+            - 60-99%: Confirmando...
+            - 100%: ✅ Confirmado y estable
+            """)
 
 run_capitulo11()

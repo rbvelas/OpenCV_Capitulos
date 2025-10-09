@@ -1,6 +1,6 @@
 numpy
-opencv-contrib-python
-opencv-python
+opencv_contrib_python
+opencv_python
 Pillow
 streamlit
-
+streamlit_webrtc

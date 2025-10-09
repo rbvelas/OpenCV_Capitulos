@@ -1,0 +1,3 @@
+[theme]
+# Fuerza a que el tema inicial sea "Light" (Claro)
+base = "light"

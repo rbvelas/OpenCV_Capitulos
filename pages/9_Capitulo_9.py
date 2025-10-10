@@ -58,10 +58,6 @@ def sparse_detector_gftt(img):
 
 def run_capitulo9():
     
-    # --- Inicialización de Estado ---
-    if 'processed_image' not in st.session_state:
-        st.session_state.processed_image = False
-    
     # --- 1. Títulos y Concepto ---
     st.title("CAPÍTULO 9: Reconocimiento de Objetos")
     st.markdown("###### _Object Recognition_")
@@ -75,15 +71,15 @@ def run_capitulo9():
     * **Detector Disperso (Sparse):** Solo encuentra los puntos de interés más fuertes. (e.g., SIFT, GFTT).
     * **Detector Denso (Dense):** Muestra puntos de forma uniforme en una cuadrícula, asegurando que todos los descriptores contribuyan al vector de características.
     """)
+
     # ✅ INICIALIZAR TODAS LAS VARIABLES DE SESSION_STATE
     if 'processed_image' not in st.session_state:
         st.session_state.processed_image = False
-    if 'img_original' not in st.session_state:
-        st.session_state.img_original = None
     if 'img_sparse' not in st.session_state:
         st.session_state.img_sparse = None
     if 'img_dense' not in st.session_state:
         st.session_state.img_dense = None
+
     # --- 2. Carga de Imagen y Previsualización ---
     st.header("🖼️ Cargar Imagen de Entrada")
     upload_col, preview_col = st.columns([3, 1])
@@ -92,10 +88,8 @@ def run_capitulo9():
         uploaded_file = st.file_uploader(
             "Selecciona una imagen (PNG, JPG, JPEG)", 
             type=["png", "jpg", "jpeg"], 
-            key="uploader"
+            key="uploader_c9"
         )
-        if uploaded_file:
-            uploaded_file.seek(0)
     
     with preview_col:
         st.markdown("<p style='font-size: 0.8em; margin-bottom: 0px;'>Vista Previa:</p>", unsafe_allow_html=True)
@@ -130,56 +124,63 @@ def run_capitulo9():
         if uploaded_file is not None:
             with st.spinner('Detectando puntos de interés...'):
                 
+                # ✅ IMPORTANTE: Resetear el puntero del archivo
+                uploaded_file.seek(0)
+                
                 # Cargar y preprocesar imagen
                 file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
                 img_cv2 = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
 
-                # Opcional: Redimensionar para un procesamiento más rápido
-                max_dim = 600
-                height, width = img_cv2.shape[:2]
-                if max(height, width) > max_dim:
-                    scale = max_dim / max(height, width)
-                    new_w, new_h = int(width * scale), int(height * scale)
-                    img_cv2 = cv2.resize(img_cv2, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                if img_cv2 is not None:
+                    # Opcional: Redimensionar para un procesamiento más rápido
+                    max_dim = 600
+                    height, width = img_cv2.shape[:2]
+                    if max(height, width) > max_dim:
+                        scale = max_dim / max(height, width)
+                        new_w, new_h = int(width * scale), int(height * scale)
+                        img_cv2 = cv2.resize(img_cv2, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-                # --- Detección Densa ---
-                dense_detector = DenseDetector(step_size=step_size, feature_scale=feature_scale, img_bound=img_bound)
-                keypoints_dense = dense_detector.detect(img_cv2)
-                
-                # Dibujar KeyPoints densos (color: rojo)
-                img_dense = np.copy(img_cv2)
-                img_dense = cv2.drawKeypoints(
-                    img_dense, 
-                    keypoints_dense, 
-                    None, 
-                    color=(0, 0, 255), # BGR: Rojo
-                    flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
-                )
+                    # --- Detección Densa ---
+                    dense_detector = DenseDetector(step_size=step_size, feature_scale=feature_scale, img_bound=img_bound)
+                    keypoints_dense = dense_detector.detect(img_cv2)
+                    
+                    # Dibujar KeyPoints densos (color: rojo)
+                    img_dense = np.copy(img_cv2)
+                    img_dense = cv2.drawKeypoints(
+                        img_dense, 
+                        keypoints_dense, 
+                        None, 
+                        color=(0, 0, 255), # BGR: Rojo
+                        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+                    )
 
-                # --- Detección Dispersa (Sparse) ---
-                keypoints_sparse = sparse_detector_gftt(img_cv2)
-                
-                # Dibujar KeyPoints dispersos (color: verde)
-                img_sparse = np.copy(img_cv2)
-                img_sparse = cv2.drawKeypoints(
-                    img_sparse, 
-                    keypoints_sparse, 
-                    None, 
-                    color=(0, 255, 0), # BGR: Verde
-                    flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
-                )
+                    # --- Detección Dispersa (Sparse) ---
+                    keypoints_sparse = sparse_detector_gftt(img_cv2)
+                    
+                    # Dibujar KeyPoints dispersos (color: verde)
+                    img_sparse = np.copy(img_cv2)
+                    img_sparse = cv2.drawKeypoints(
+                        img_sparse, 
+                        keypoints_sparse, 
+                        None, 
+                        color=(0, 255, 0), # BGR: Verde
+                        flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
+                    )
 
-                # Almacenar resultados en el estado de sesión
-                st.session_state.img_dense = img_dense
-                st.session_state.img_sparse = img_sparse
-                st.session_state.processed_image = True
-                st.success(f'Detección completada. Se encontraron {len(keypoints_dense)} puntos densos y {len(keypoints_sparse)} puntos dispersos.')
+                    # Almacenar resultados en el estado de sesión
+                    st.session_state.img_dense = img_dense
+                    st.session_state.img_sparse = img_sparse
+                    st.session_state.processed_image = True
+                    st.success(f'Detección completada. Se encontraron {len(keypoints_dense)} puntos densos y {len(keypoints_sparse)} puntos dispersos.')
+                else:
+                    st.error("Error al cargar la imagen. Por favor, intenta con otra imagen.")
+                    st.session_state.processed_image = False
         else:
             st.error("Por favor, sube una imagen primero.")
             st.session_state.processed_image = False
 
     # --- 5. Mostrar Resultados ---
-    if st.session_state.processed_image:
+    if st.session_state.processed_image and st.session_state.img_sparse is not None and st.session_state.img_dense is not None:
         st.markdown("---")
         st.header("Resultados de la Detección de Características")
 

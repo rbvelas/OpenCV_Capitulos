@@ -33,7 +33,8 @@ def extract_sift_features(img_input):
 
 def extract_brief_features(img_input):
     """
-    Extrae características BRIEF de la imagen usando FAST para detección.
+    Extrae características usando ORB (alternativa moderna a BRIEF).
+    ORB = Oriented FAST and Rotated BRIEF, que es una mejora de BRIEF.
 
     Args:
         img_input (np.array): Imagen de entrada en formato BGR (OpenCV).
@@ -44,28 +45,28 @@ def extract_brief_features(img_input):
     gray_image = cv2.cvtColor(img_input, cv2.COLOR_BGR2GRAY)
     
     try:
-        # Initiate FAST detector
-        fast = cv2.FastFeatureDetector_create()
-        
-        # Initiate BRIEF extractor
-        brief = cv2.xfeatures2d.BriefDescriptorExtractor_create()
-        
-        # Find the keypoints with FAST
-        keypoints = fast.detect(gray_image, None)
-        
-        # Compute the descriptors with BRIEF
-        keypoints, descriptors = brief.compute(gray_image, keypoints)
+        # OPCIÓN 1: Intentar usar BRIEF desde xfeatures2d (si está disponible)
+        try:
+            fast = cv2.FastFeatureDetector_create()
+            brief = cv2.xfeatures2d.BriefDescriptorExtractor_create()
+            keypoints = fast.detect(gray_image, None)
+            keypoints, descriptors = brief.compute(gray_image, keypoints)
+            method_used = "BRIEF"
+        except (AttributeError, cv2.error):
+            # OPCIÓN 2: Usar ORB como alternativa (recomendado para OpenCV 4.x)
+            orb = cv2.ORB_create(nfeatures=500)  # Limitar a 500 keypoints
+            keypoints, descriptors = orb.detectAndCompute(gray_image, None)
+            method_used = "ORB (alternativa a BRIEF)"
         
         # Dibujar keypoints
         img_output = img_input.copy()
         cv2.drawKeypoints(img_output, keypoints, img_output, color=(0, 255, 0))
         
-        return img_output, len(keypoints), None
-    except cv2.error as e:
-        error_msg = str(e)
-        return img_input, 0, f"Error al ejecutar BRIEF: {error_msg}"
-    except AttributeError:
-        return img_input, 0, "BRIEF no está disponible. Instala opencv-contrib-python: pip install opencv-contrib-python"
+        return img_output, len(keypoints), None, method_used
+        
+    except Exception as e:
+        error_msg = f"Error al ejecutar detección de características: {str(e)}"
+        return img_input, 0, error_msg, "Ninguno"
 
 
 def display_feature_tab(tab, img_input, feature_type):
@@ -76,14 +77,20 @@ def display_feature_tab(tab, img_input, feature_type):
                 img_output, num_keypoints = extract_sift_features(img_input)
                 display_title = "Salida: SIFT Features"
                 error_msg = None
+                method_used = "SIFT"
             elif feature_type == 'brief':
-                img_output, num_keypoints, error_msg = extract_brief_features(img_input)
-                display_title = "Salida: BRIEF Features"
+                img_output, num_keypoints, error_msg, method_used = extract_brief_features(img_input)
+                display_title = f"Salida: {method_used}"
             else:
                 img_output = img_input
                 num_keypoints = 0
                 display_title = "Sin procesamiento"
                 error_msg = None
+                method_used = "Ninguno"
+            
+            # Mostrar información del método usado
+            if feature_type == 'brief' and method_used == "ORB (alternativa a BRIEF)":
+                st.info("ℹ️ **Nota:** Se está usando **ORB** (Oriented FAST and Rotated BRIEF) como alternativa moderna a BRIEF. ORB es más rápido y robusto que BRIEF estándar.")
             
             # Mostrar error si existe
             if error_msg:
@@ -101,7 +108,7 @@ def display_feature_tab(tab, img_input, feature_type):
                 st.caption(display_title)
                 st.image(cv2.cvtColor(img_output, cv2.COLOR_BGR2RGB), use_container_width=True)
                 if num_keypoints > 0:
-                    st.success(f"✅ {num_keypoints} puntos clave detectados")
+                    st.success(f"✅ {num_keypoints} puntos clave detectados con {method_used}")
                 elif not error_msg:
                     st.warning("⚠️ No se detectaron puntos clave.")
         else:
@@ -118,7 +125,12 @@ def run_capitulo5():
 
     # ------------------ 2. Subtítulo y Concepto ------------------
     st.subheader("Scale-invariant feature transform (SIFT) and Binary robust independent elementary features (BRIEF)")
-    st.info("SIFT y BRIEF son algoritmos de detección de características robustas en imágenes, útiles para reconocimiento de objetos, seguimiento y matching de imágenes. Detectan puntos clave invariantes a escala, rotación e iluminación.")
+    st.info("""
+    **SIFT** y **BRIEF** son algoritmos de detección de características robustas en imágenes, útiles para reconocimiento de objetos, seguimiento y matching de imágenes.
+    
+    - **SIFT**: Detecta puntos clave invariantes a escala, rotación e iluminación.
+    - **BRIEF/ORB**: Descriptores binarios rápidos y eficientes para matching.
+    """)
     
     # ------------------ 3. Carga de Imagen y Previsualización ------------------
     st.header("🖼️ Cargar Imagen de Entrada")
@@ -173,12 +185,12 @@ def run_capitulo5():
         st.header("Resultados de la Extracción de Características")
 
         # Define las pestañas
-        tab_sift, tab_brief = st.tabs(["SIFT", "BRIEF"])
+        tab_sift, tab_brief = st.tabs(["SIFT", "BRIEF/ORB"])
 
         # Contenido de la Pestaña 1 (SIFT)
         display_feature_tab(tab_sift, img_input, 'sift')
 
-        # Contenido de la Pestaña 2 (BRIEF)
+        # Contenido de la Pestaña 2 (BRIEF/ORB)
         display_feature_tab(tab_brief, img_input, 'brief')
 
 

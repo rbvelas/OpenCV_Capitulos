@@ -3,6 +3,9 @@ import cv2
 import numpy as np
 import io
 
+# Título de la Página (debe estar ANTES de cualquier función)
+st.set_page_config(page_title="Capítulo 6", page_icon="6️⃣", layout="wide")
+
 # --- Funciones de Utilidad ---
 
 def reset_results():
@@ -137,7 +140,6 @@ def expand_image_seam_carving(img_input, num_seams):
         seam = find_vertical_seam(img_for_seam_finding, energy)
         
         # Guardar la costura antes de eliminarla para saber dónde duplicar
-        # Es necesario transformar la costura para que mapee a la imagen original (img_output)
         seams_to_add.append(seam) 
         
         # Visualizar costura en la imagen original
@@ -147,23 +149,10 @@ def expand_image_seam_carving(img_input, num_seams):
         img_for_seam_finding = remove_vertical_seam(img_for_seam_finding, seam)
     
     # 2. Reconstruir la imagen añadiendo las costuras duplicadas
-    # Se insertan en orden inverso para mantener la coherencia del mapeo
     for seam in reversed(seams_to_add):
-        # Modificar seam para que se adapte al tamaño cambiante de img_output
-        rows, cols, _ = img_output.shape
-        
-        # Convertir la costura al espacio de la imagen de salida
         current_seam = np.copy(seam)
-        
-        # Aplicar el desplazamiento acumulado de las costuras ya añadidas
-        # Nota: La lógica de la función add_vertical_seam está simplificada y puede
-        # requerir una implementación más compleja de "back-mapping" para un rendimiento
-        # perfecto en la expansión, pero esta implementación simple de "duplicar"
-        # la costura de menor energía en la imagen reducida es común.
         img_output = add_vertical_seam(img_output, current_seam)
 
-    # La visualización muestra la última costura encontrada, para una mejor demostración,
-    # vamos a usar la imagen donde se superponen las costuras de la fase 1.
     return img_output, all_seams_overlay
 
 
@@ -177,9 +166,7 @@ def reduce_image_seam_carving(img_input, num_seams):
         energy = compute_energy_matrix(img)
         seam = find_vertical_seam(img, energy)
         
-        # Visualizar costura solo en la primera iteración para no ralentizar,
-        # o en este caso, visualizamos las costuras en la imagen original
-        # para mostrar lo que se eliminaría si se hiciera a la vez.
+        # Visualizar costura en la imagen original
         img_overlay_seam = overlay_vertical_seam(img_overlay_seam, seam)
         
         # Eliminar la costura
@@ -190,25 +177,29 @@ def reduce_image_seam_carving(img_input, num_seams):
 
 def run_capitulo6():
     
-    # Título de la Página
-    st.set_page_config(page_title="Capítulo 6", page_icon="6️⃣", layout="wide")
-
-    # Inicializar estado de sesión
-    if 'processed_image' not in st.session_state:
-        st.session_state.processed_image = False
-    
     # ------------------ 1. Títulos ------------------
     st.title("CAPÍTULO 6: Tallado de Costuras")
-    st.markdown("###### _Seam Carving_") # Título en inglés más pequeño
+    st.markdown("###### _Seam Carving_")
 
     st.markdown("---")
 
     # ------------------ 2. Subtítulo y Concepto ------------------
-    # Subtítulo solicitado: Seam Carving (Ponga el español primero y luego abajo con letras mas pequeñas en ingles)
     st.subheader("Expandir y Reducir Imagen mediante Seam Carving")
     st.markdown("###### _Expand and Reduce Image by Seam Carving_")
     
     st.info("El **Seam Carving** es una técnica de redimensionamiento consciente del contenido que identifica y manipula las 'costuras' (caminos de píxeles de baja energía) para expandir o reducir imágenes sin distorsionar las áreas importantes. **Advertencia**: El procesamiento puede tomar varios segundos dependiendo del número de costuras seleccionadas.")
+
+    # ✅ INICIALIZAR TODAS LAS VARIABLES DE SESSION_STATE
+    if 'processed_image' not in st.session_state:
+        st.session_state.processed_image = False
+    if 'image_input' not in st.session_state:
+        st.session_state.image_input = None
+    if 'image_result' not in st.session_state:
+        st.session_state.image_result = None
+    if 'image_seams' not in st.session_state:
+        st.session_state.image_seams = None
+    if 'operation' not in st.session_state:
+        st.session_state.operation = None
 
     # ------------------ 3. Carga de Imagen y Previsualización ------------------
     st.header("🖼️ Cargar Imagen de Entrada")
@@ -219,30 +210,25 @@ def run_capitulo6():
         uploaded_file = st.file_uploader(
             "Selecciona una imagen (PNG, JPG, JPEG)", 
             type=["png", "jpg", "jpeg"], 
-            key="uploader"
+            key="uploader_c6"
         )
 
     with preview_col:
         st.markdown("<p style='font-size: 0.8em; margin-bottom: 0px;'>Vista Previa:</p>", unsafe_allow_html=True)
         if uploaded_file is not None:
-            # Rebobinar el archivo para la vista previa
-            uploaded_file.seek(0)
             st.image(uploaded_file, width=100)
-            # Rebobinar de nuevo para el procesamiento
-            uploaded_file.seek(0)
         else:
             st.markdown("<div style='height: 100px; border: 1px dashed #ccc; padding: 5px; text-align: center; line-height: 80px; color: #888;'>Sin imagen</div>", unsafe_allow_html=True)
 
     # ------------------ 4. Selección de Operación ------------------
     st.header("⚙️ Configuración")
     
-    # Añadimos el on_change para resetear el estado de los resultados
     operation = st.radio(
         "Selecciona la operación:",
         ["Expandir (Añadir costuras)", "Reducir (Eliminar costuras)"],
         horizontal=True,
-        key='operation_select', # Clave para la gestión de estado de Streamlit
-        on_change=reset_results # Función de callback para borrar resultados
+        key='operation_select',
+        on_change=reset_results
     )
 
     num_seams = st.slider("Número de costuras a procesar", min_value=1, max_value=100, value=20, step=1)
@@ -251,39 +237,45 @@ def run_capitulo6():
     if st.button("Aplicar Seam Carving", type="primary"):
         if uploaded_file is not None:
             with st.spinner(f'Procesando {num_seams} costuras...'):
+                # ✅ IMPORTANTE: Resetear el puntero del archivo
+                uploaded_file.seek(0)
+                
                 # Leer bytes del archivo subido
                 file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
                 img_cv2 = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
                 
-                # Opcional: Redimensionar si es muy grande para evitar timeout (máx 500 ancho)
-                height, width = img_cv2.shape[:2]
-                max_dim = 500
-                if max(height, width) > max_dim:
-                    scale = max_dim / max(height, width)
-                    new_w, new_h = int(width * scale), int(height * scale)
-                    img_cv2 = cv2.resize(img_cv2, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                if img_cv2 is not None:
+                    # Opcional: Redimensionar si es muy grande
+                    height, width = img_cv2.shape[:2]
+                    max_dim = 500
+                    if max(height, width) > max_dim:
+                        scale = max_dim / max(height, width)
+                        new_w, new_h = int(width * scale), int(height * scale)
+                        img_cv2 = cv2.resize(img_cv2, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-                if operation == "Expandir (Añadir costuras)":
-                    img_result, img_seams = expand_image_seam_carving(img_cv2, num_seams)
-                    operation_text = "expandida"
+                    if operation == "Expandir (Añadir costuras)":
+                        img_result, img_seams = expand_image_seam_carving(img_cv2, num_seams)
+                        operation_text = "expandida"
+                    else:
+                        img_result, img_seams = reduce_image_seam_carving(img_cv2, num_seams)
+                        operation_text = "reducida"
+                    
+                    # Almacenar resultados en el estado de sesión
+                    st.session_state.image_input = img_cv2
+                    st.session_state.image_result = img_result
+                    st.session_state.image_seams = img_seams
+                    st.session_state.operation = operation
+                    st.session_state.processed_image = True
+                    st.success(f'¡Procesamiento completado! La imagen fue {operation_text} con {num_seams} costuras.')
                 else:
-                    img_result, img_seams = reduce_image_seam_carving(img_cv2, num_seams)
-                    operation_text = "reducida"
-                
-                # Almacenar resultados en el estado de sesión
-                st.session_state.image_input = img_cv2
-                st.session_state.image_result = img_result
-                st.session_state.image_seams = img_seams
-                st.session_state.operation = operation
-                st.session_state.processed_image = True # Habilita la sección de resultados
-                st.success(f'¡Procesamiento completado! La imagen fue {operation_text} con {num_seams} costuras.')
+                    st.error("Error al cargar la imagen. Por favor, intenta con otra imagen.")
+                    st.session_state.processed_image = False
         else:
             st.error("Por favor, sube una imagen primero.")
-            st.session_state.processed_image = False # Asegurar que no se muestren resultados vacíos
+            st.session_state.processed_image = False
 
     # ------------------ 6. Mostrar Resultados ------------------
-    # Esta sección solo se ejecuta si st.session_state.processed_image es True
-    if st.session_state.processed_image:
+    if st.session_state.processed_image and st.session_state.image_result is not None:
         st.markdown("---")
         st.header("Resultados del Seam Carving")
 
@@ -301,7 +293,7 @@ def run_capitulo6():
             
             # --- Columna Resultado ---
             with col_result:
-                result_label = "Expandida" if "Expandir" in st.session_state.operation else "Reducida"
+                result_label = "Expandida" if st.session_state.operation and "Expandir" in st.session_state.operation else "Reducida"
                 st.caption(f"Imagen {result_label}")
                 st.image(cv2.cvtColor(st.session_state.image_result, cv2.COLOR_BGR2RGB), use_container_width=True)
                 st.markdown(f"**Dimensiones:** {st.session_state.image_result.shape[1]} × {st.session_state.image_result.shape[0]} píxeles")
@@ -321,7 +313,7 @@ def run_capitulo6():
         with tab2:
             st.caption("Costuras Identificadas (en verde) para Remoción/Duplicación")
             st.image(cv2.cvtColor(st.session_state.image_seams, cv2.COLOR_BGR2RGB), use_container_width=True)
-            operation_desc = "duplicaron para expandir" if "Expandir" in st.session_state.operation else "eliminaron para reducir"
+            operation_desc = "duplicaron para expandir" if st.session_state.operation and "Expandir" in st.session_state.operation else "eliminaron para reducir"
             st.info(f"Las líneas verdes muestran las costuras de menor energía que se identificaron y {operation_desc} la imagen.")
 
 

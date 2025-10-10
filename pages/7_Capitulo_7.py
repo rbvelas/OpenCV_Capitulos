@@ -108,7 +108,14 @@ def run_capitulo7():
     st.markdown("##### *Detecting Shapes and Segmenting an Image*")
 
     st.markdown("---")
-
+    if 'processed_image' not in st.session_state:
+        st.session_state.processed_image = False
+    
+    if 'results' not in st.session_state:
+        st.session_state.results = None
+    
+    if 'image_input' not in st.session_state:
+        st.session_state.image_input = None
     # ------------------ 2. Subtítulo y Concepto ------------------
     st.subheader("Algoritmo Watershed | **Watershed Algorithm**")
     st.info("El algoritmo Watershed es una técnica de segmentación de imágenes que trata la imagen como un mapa topográfico. Identifica y separa objetos conectados mediante el análisis de 'cuencas' y 'crestas' en el gradiente de la imagen.")

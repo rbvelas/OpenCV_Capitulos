@@ -76,6 +76,14 @@ def run_capitulo9():
     * **Detector Denso (Dense):** Muestra puntos de forma uniforme en una cuadrícula, asegurando que todos los descriptores contribuyan al vector de características.
     """)
 
+    # ✅ INICIALIZAR TODAS LAS VARIABLES DE SESSION_STATE
+    if 'processed_image' not in st.session_state:
+        st.session_state.processed_image = False
+    if 'results' not in st.session_state:
+        st.session_state.results = None
+    if 'image_input' not in st.session_state:
+        st.session_state.image_input = None
+        
     # --- 2. Carga de Imagen y Previsualización ---
     st.header("🖼️ Cargar Imagen de Entrada")
     upload_col, preview_col = st.columns([3, 1])

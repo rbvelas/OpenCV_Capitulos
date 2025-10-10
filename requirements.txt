@@ -1,10 +1,9 @@
-av
-# ⚠️ CAMBIO CLAVE: Fijar una versión de numpy compatible
-numpy==1.22.4 
-opencv_contrib_python==4.5.5.64
-opencv_python==4.5.5.64 
-pandas
-Pillow
-scikit_learn
-streamlit
-streamlit_webrtc
+av==16.0.0
+numpy==2.3.3
+opencv_contrib_python==4.12.0.88
+opencv_python==4.12.0.88
+pandas==2.3.3
+Pillow==11.3.0
+scikit_learn==1.7.2
+streamlit==1.50.0
+streamlit_webrtc==0.63.11

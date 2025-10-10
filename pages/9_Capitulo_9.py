@@ -75,15 +75,15 @@ def run_capitulo9():
     * **Detector Disperso (Sparse):** Solo encuentra los puntos de interés más fuertes. (e.g., SIFT, GFTT).
     * **Detector Denso (Dense):** Muestra puntos de forma uniforme en una cuadrícula, asegurando que todos los descriptores contribuyan al vector de características.
     """)
-
     # ✅ INICIALIZAR TODAS LAS VARIABLES DE SESSION_STATE
     if 'processed_image' not in st.session_state:
         st.session_state.processed_image = False
-    if 'results' not in st.session_state:
-        st.session_state.results = None
-    if 'image_input' not in st.session_state:
-        st.session_state.image_input = None
-        
+    if 'img_original' not in st.session_state:
+        st.session_state.img_original = None
+    if 'img_sparse' not in st.session_state:
+        st.session_state.img_sparse = None
+    if 'img_dense' not in st.session_state:
+        st.session_state.img_dense = None
     # --- 2. Carga de Imagen y Previsualización ---
     st.header("🖼️ Cargar Imagen de Entrada")
     upload_col, preview_col = st.columns([3, 1])

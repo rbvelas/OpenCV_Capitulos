@@ -108,17 +108,18 @@ def run_capitulo7():
     st.markdown("##### *Detecting Shapes and Segmenting an Image*")
 
     st.markdown("---")
-    if 'processed_image' not in st.session_state:
-        st.session_state.processed_image = False
-    
-    if 'results' not in st.session_state:
-        st.session_state.results = None
-    
-    if 'image_input' not in st.session_state:
-        st.session_state.image_input = None
+
     # ------------------ 2. Subtítulo y Concepto ------------------
     st.subheader("Algoritmo Watershed | **Watershed Algorithm**")
     st.info("El algoritmo Watershed es una técnica de segmentación de imágenes que trata la imagen como un mapa topográfico. Identifica y separa objetos conectados mediante el análisis de 'cuencas' y 'crestas' en el gradiente de la imagen.")
+
+    # ✅ INICIALIZAR TODAS LAS VARIABLES DE SESSION_STATE
+    if 'processed_image' not in st.session_state:
+        st.session_state.processed_image = False
+    if 'results' not in st.session_state:
+        st.session_state.results = None
+    if 'image_input' not in st.session_state:
+        st.session_state.image_input = None
 
     # ------------------ 3. Carga de Imagen y Previsualización ------------------
     st.header("🖼️ Cargar Imagen de Entrada")
@@ -126,7 +127,7 @@ def run_capitulo7():
     upload_col, preview_col = st.columns([3, 1])
 
     with upload_col:
-        uploaded_file = st.file_uploader("Selecciona una imagen (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"], key="uploader")
+        uploaded_file = st.file_uploader("Selecciona una imagen (PNG, JPG, JPEG)", type=["png", "jpg", "jpeg"], key="uploader_c7")
 
     with preview_col:
         st.markdown("<p style='font-size: 0.8em; margin-bottom: 0px;'>Vista Previa:</p>", unsafe_allow_html=True)
@@ -158,29 +159,32 @@ def run_capitulo7():
             help="Define qué tan seguros deben estar los píxeles para ser considerados objetos. Valores bajos detectan más objetos, valores altos son más conservadores."
         ) / 100.0
 
-    # Inicializar el estado de sesión
-    if 'processed_image' not in st.session_state:
-        st.session_state.processed_image = False
-
     # ------------------ 5. Botón de Procesamiento ------------------
     if st.button("Aplicar Segmentación Watershed", type="primary"):
         if uploaded_file is not None:
             with st.spinner('Procesando segmentación...'):
+                # ✅ IMPORTANTE: Resetear el puntero del archivo
+                uploaded_file.seek(0)
+                
                 file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
                 img_cv2 = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
                 
-                results = apply_watershed_segmentation(img_cv2, morph_iterations, dist_threshold)
-                
-                st.session_state.image_input = img_cv2
-                st.session_state.results = results
-                st.session_state.processed_image = True
-                st.success(f'¡Segmentación completada! Se detectaron {results["num_objects"]} objetos.')
+                if img_cv2 is not None:
+                    results = apply_watershed_segmentation(img_cv2, morph_iterations, dist_threshold)
+                    
+                    st.session_state.image_input = img_cv2
+                    st.session_state.results = results
+                    st.session_state.processed_image = True
+                    st.success(f'¡Segmentación completada! Se detectaron {results["num_objects"]} objetos.')
+                else:
+                    st.error("Error al cargar la imagen. Por favor, intenta con otra imagen.")
+                    st.session_state.processed_image = False
         else:
             st.error("Por favor, sube una imagen primero.")
             st.session_state.processed_image = False
 
     # ------------------ 6. Mostrar Resultados ------------------
-    if st.session_state.processed_image:
+    if st.session_state.processed_image and st.session_state.results is not None:
         st.markdown("---")
         st.header("Resultados de la Segmentación Watershed")
         

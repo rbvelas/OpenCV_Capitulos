@@ -1,7 +1,8 @@
 av
 numpy
-opencv_contrib_python
-opencv_python
+# ⚠️ CAMBIO CLAVE: Especificar una versión estable y funcional para contrib
+opencv_contrib_python==4.5.5.64
+opencv_python==4.5.5.64 
 pandas
 Pillow
 scikit_learn

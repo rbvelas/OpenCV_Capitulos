@@ -762,6 +762,7 @@ def run_capitulo11():
             return
         
         st.success(f"✅ Detecta: **{', '.join(st.session_state.label_words)}**")
+        st.warning("⚠️ El modelo podría no funcionar correctamente debido a la limitada cantidad de datos disponibles para su entrenamiento.")
         
         input_option = st.radio(
             "Fuente:",
@@ -833,7 +834,7 @@ def run_capitulo11():
             return
         
         st.success(f"✅ Modelo cargado: **{', '.join(st.session_state.label_words)}**")
-
+        st.warning("⚠️ El modelo podría no funcionar correctamente debido a la limitada cantidad de datos disponibles para su entrenamiento.")
         # Tips expandibles
         with st.expander("💡 Tips para MÁXIMA precisión", expanded=True):
             st.markdown("""

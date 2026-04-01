@@ -3,10 +3,3 @@ libsm6
 libxext6
 libxrender1
 ffmpeg
-libavformat-dev
-libavcodec-dev
-libavdevice-dev
-libavutil-dev
-libswscale-dev
-libswresample-dev
-pkg-config

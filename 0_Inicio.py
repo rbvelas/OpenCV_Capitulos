@@ -86,7 +86,7 @@ try:
         st.markdown(
             """
             <p style='font-size: 0.95em; font-weight: 600; margin-bottom: 3px;'>
-                Desarrollado por: <span style='color:#1E3A8A;'>Velasquez García, Ricardo Bernardo</span>
+                Desarrollado por: <span style='color:#1E3A8A;'>Velasquez, Ricardo</span>
             </p>
             <p style='font-size: 0.9em; margin-top: 0px; margin-bottom: 2px; color:#4B5563;'>
                 Escuela Profesional de Ingeniería de Sistemas
